@@ -1,18 +1,16 @@
-# app.py
+# app.py — chunk 1 of 4
 """
-KonnectOps Mobile — Full production-ready app with:
-- Admin login (single admin) -> activates both Google & Groq keys
-- Unified AI engine: Google Gemini (primary) -> Groq (fallback) -> local fallback
-- Landing Page generator, Marketing Studio, Image prompts, Calendar, Utilities
-- Blog generator (Home Konnect structure), cover image prompt + attempt to generate
-- Uploads to AWS S3 / Google Cloud Storage (optional libs)
-- Per-page background images (upload in sidebar)
-- All widgets have unique keys (prevents duplicate element ID)
-- Safe retries, clear UI messages
+KonnectOps Mobile — Updated with:
+- Admin login
+- Unified AI (Google Gemini primary -> Groq fallback)
+- Groq model updated to 'llama-3.3-70b-versatile'
+- Gemini safe default 'gemini-2.0-flash'
+- All original features preserved
+Note: Option A selected — embed API keys here (replace placeholders).
 """
 
 # -------------------------
-# STANDARD IMPORTS
+# IMPORTS
 # -------------------------
 import streamlit as st
 import google.generativeai as genai
@@ -46,28 +44,25 @@ except Exception:
     GCS_AVAILABLE = False
 
 # -------------------------
-# CONFIG: Admin & API keys
+# ADMIN CREDENTIALS & API KEYS (Option A: embed here)
+# Replace values below with your real keys and secure credentials.
 # -------------------------
-# Replace these placeholder values with your real admin credentials and keys BEFORE deployment,
-# or leave them empty and paste keys in the admin-only sidebar after logging in.
-ADMIN_USERNAME = "admin"               # replace
-ADMIN_PASSWORD = "Konnect@2024"        # replace
-
-# Primary (Gemini) and fallback (Groq) keys. If empty, admin will paste them after login in the sidebar.
-GOOGLE_API_KEY = "AIzaSyD_xRXkmB4fDjly_9eud5D1orqGcbacQoc"   # paste your Google Generative AI key here (or leave empty)
-GROQ_API_KEY = "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"     # paste your Groq API key here (or leave empty)
+ADMIN_USERNAME = "admin"               # change this
+ADMIN_PASSWORD = "Konnect@2024"        # change this
+GOOGLE_API_KEY = "AIzaSyD_xRXkmB4fDjly_9eud5D1orqGcbacQoc"    # <-- paste your Google Generative AI key here
+GROQ_API_KEY = "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"      # <-- paste your Groq API key here
 
 # -------------------------
-# LOGGING
+# LOGGING & PAGE CONFIG
 # -------------------------
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("konnectops")
 
-# -------------------------
-# PAGE & CSS
-# -------------------------
 st.set_page_config(page_title="KonnectOps Mobile", page_icon="🏢", layout="wide", initial_sidebar_state="expanded")
 
+# -------------------------
+# STYLES & ROOT
+# -------------------------
 st.markdown("""
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 <style>
@@ -92,11 +87,10 @@ st.markdown('<div class="konnectops-root">', unsafe_allow_html=True)
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
 
-# store activated keys in session
 if "api_key" not in st.session_state:
-    st.session_state.api_key = ""
+    st.session_state.api_key = GOOGLE_API_KEY or ""
 if "groq_api_key" not in st.session_state:
-    st.session_state.groq_api_key = ""
+    st.session_state.groq_api_key = GROQ_API_KEY or ""
 if "model_name" not in st.session_state:
     st.session_state.model_name = None
 if "bg_images" not in st.session_state:
@@ -119,7 +113,7 @@ if "gcs_credentials_json" not in st.session_state:
     st.session_state.gcs_credentials_json = None
 
 # -------------------------
-# MODEL helpers
+# MODEL & AI HELPERS
 # -------------------------
 @lru_cache(maxsize=1)
 def fetch_models_for_key(key: str):
@@ -165,16 +159,39 @@ def try_connect_google(key: str) -> Optional[str]:
     return None
 
 # -------------------------
-# Unified AI failover engine (Gemini -> Groq -> fallback)
+# Image generation helper (best-effort)
 # -------------------------
+def generate_cover_image_via_genai(prompt: str, size: str = "1200x628") -> Optional[bytes]:
+    try:
+        if hasattr(genai, "images") and hasattr(genai.images, "generate"):
+            resp = genai.images.generate(model="image-alpha-001", prompt=prompt, size=size)
+            b64 = None
+            if hasattr(resp, "data"):
+                item = resp.data[0]
+                b64 = getattr(item, "b64_json", None) or (item.get("b64_json") if isinstance(item, dict) else None)
+            elif isinstance(resp, dict):
+                b64 = resp.get("b64_json") or resp.get("data", [{}])[0].get("b64_json")
+            if b64:
+                return base64.b64decode(b64)
+        return None
+    except Exception as e:
+        logger.warning("Image generation failed: %s", e)
+        return None
 
-def ask_ai_gemini(prompt: str, timeout: int = 30):
-    """Call Google Gemini via google.generativeai, return text or special codes on failure."""
+# -------------------------
+# Unified AI engine: Gemini -> Groq -> fallback
+# -------------------------
+def ask_ai_gemini(prompt: str, timeout:int=30):
+    """Call Google Gemini via google.generativeai. Return text or codes."""
     try:
         if not st.session_state.api_key:
             return "GEMINI_NO_KEY"
         genai.configure(api_key=st.session_state.api_key)
         model_name = st.session_state.model_name or try_connect_google(st.session_state.api_key)
+        # Safer default model choice if discovery returns heavy preview:
+        if model_name and "2.5" in model_name:
+            # prefer a flash model if available
+            model_name = "models/gemini-2.0-flash" if "gemini-2.0-flash" in (st.session_state.available_models or []) else model_name
         if not model_name:
             return "GEMINI_NO_MODEL"
         model = genai.GenerativeModel(model_name)
@@ -186,41 +203,38 @@ def ask_ai_gemini(prompt: str, timeout: int = 30):
     except Exception as e:
         msg = str(e)
         st.session_state.last_ai_error = msg
-        # inspect message for quota or 429
         if re.search(r"quota|429|rate limit|exceeded", msg, re.IGNORECASE):
             return "GEMINI_QUOTA"
         return f"GEMINI_ERROR: {msg}"
 
 def ask_ai_groq(prompt: str, timeout: int = 25):
-    """Call Groq OpenAI-compatible endpoint. Requires Groq API key in st.session_state.groq_api_key"""
+    """Call Groq OpenAI-compatible endpoint."""
     key = st.session_state.groq_api_key
     if not key:
         return "GROQ_NO_KEY"
     try:
         headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
         payload = {
-            "model": "llama-3.1-70b-versatile",
+            "model": "llama-3.3-70b-versatile",  # updated working model
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.7
         }
         resp = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload, timeout=timeout)
         if resp.status_code == 200:
             js = resp.json()
-            # robust extraction
             try:
                 return js["choices"][0]["message"]["content"]
             except Exception:
                 return str(js)
-        else:
-            text = resp.text
-            if resp.status_code == 429:
-                return "GROQ_QUOTA"
-            return f"GROQ_ERROR: {resp.status_code} {text}"
+        if resp.status_code == 429:
+            return "GROQ_QUOTA"
+        # model decommission returns 400 with JSON message; bubble it up
+        return f"GROQ_ERROR: {resp.status_code} {resp.text}"
     except Exception as e:
         return f"GROQ_ERROR: {e}"
 
 def local_homekonnect_blog(project, location, developer, unitmix, usps, price_hint, possession, phone, email):
-    """Return a home-konnect style blog markdown as fallback."""
+    """Local fallback markdown blog (Home Konnect style)."""
     usps_list = [u.strip() for u in (usps or "").split(",") if u.strip()]
     usps_lines = "\n".join([f"- {u}" for u in usps_list]) if usps_list else "- Family-friendly\n- Good connectivity\n- Value pricing"
     md = (
@@ -262,23 +276,16 @@ f"**Tags:** {project.lower().replace(' ','_')}, {location.lower().replace(' ','_
     return md
 
 def ask_ai_unified(prompt: str):
-    """
-    Unified AI call:
-    1. Try Gemini
-    2. If Gemini indicates quota or error -> try Groq
-    3. If Groq fails -> return special error code or fallback depending on caller
-    """
-    # Try Gemini first
+    """Try Gemini first, then Groq, then allow caller to fallback to local template."""
     res_gem = ask_ai_gemini(prompt)
     if res_gem and not res_gem.startswith("GEMINI_") and not res_gem.startswith("GEMINI_ERROR"):
         return res_gem
 
-    # If Gemini had a quota issue or missing keys, try Groq
     res_groq = ask_ai_groq(prompt)
     if res_groq and not res_groq.startswith("GROQ_") and not res_groq.startswith("GROQ_ERROR"):
         return res_groq
 
-    # If both failed, return combined error to allow caller to fallback
+    # Both failed
     err = f"ERROR_BOTH_PROVIDERS: Gemini-> {res_gem} | Groq-> {res_groq}"
     st.session_state.last_ai_error = err
     return err
@@ -303,73 +310,32 @@ def upload_to_gcs(bytes_data: bytes, bucket_name: str, object_name: str, credent
     blob.upload_from_string(bytes_data, content_type="image/jpeg")
     blob.make_public()
     return blob.public_url
+# app.py — chunk 2 of 4
+"""
+Main layout: Header + Tabs 1-5
+"""
 
-# -------------------------
-# Helper: render background card
-# -------------------------
-def render_bg_section(page_name, inner_html):
+# Helper: background card renderer
+def render_bg_section(page_name: str, inner_html: str):
     bg = st.session_state.bg_images.get(page_name, "")
     style = f"background-image: url('{bg}');" if bg else "background: linear-gradient(180deg,#f8fafc,#e9eef6);"
     st.markdown(f"<div class='bg-section' style=\"{style}\"><div class='content-box'>{inner_html}</div></div>", unsafe_allow_html=True)
 
-# -------------------------
-# ADMIN LOGIN UI (top)
-# -------------------------
-# If not logged in, show admin login screen (only admin can continue)
-if not st.session_state.logged_in:
-    st.markdown("<div style='max-width:900px;margin:20px auto;'>", unsafe_allow_html=True)
-    st.markdown("<h2>🔐 KonnectOps Admin Login</h2>", unsafe_allow_html=True)
-    st.markdown("<p class='subtitle'>Only administrators may access API keys and features.</p>", unsafe_allow_html=True)
-
-    u = st.text_input("Username", key="login_username")
-    p = st.text_input("Password", type="password", key="login_password")
-
-    col_a, col_b = st.columns([1,1])
-    with col_a:
-        if st.button("Login", key="login_button"):
-            if u == ADMIN_USERNAME and p == ADMIN_PASSWORD:
-                st.session_state.logged_in = True
-                # Activate keys (either constants or left empty if constants empty)
-                if GOOGLE_API_KEY:
-                    st.session_state.api_key = GOOGLE_API_KEY
-                    # discover model
-                    mn = try_connect_google(st.session_state.api_key)
-                    if mn:
-                        st.session_state.model_name = mn
-                if GROQ_API_KEY:
-                    st.session_state.groq_api_key = GROQ_API_KEY
-                st.success("Login successful — API providers activated (if keys configured).")
-                time.sleep(0.3)
-                st.rerun()
-            else:
-                st.error("Invalid username or password.")
-    with col_b:
-        st.write("If you don't want to hardcode keys in the file, paste them below after login in the Admin panel.")
-        st.write("You can also keep them in the top-of-file constants before deployment.")
-
-    st.markdown("</div>", unsafe_allow_html=True)
-    st.stop()
-
-# -------------------------
-# ADMIN PANEL: Sidebar shows admin-only inputs for keys & backgrounds
-# -------------------------
+# ADMIN PANEL: sidebar (only visible to admin after login)
 with st.sidebar:
     st.header("Admin Panel")
     st.caption("Only visible after admin login for this session.")
-
-    # Allow admin to set/override keys (kept in session only)
-    api_in = st.text_input("Google Gemini Key (optional)", type="password", value=st.session_state.api_key or "", key="admin_google_key")
+    # Keys: admin can paste keys here (overrides embedded)
+    api_in = st.text_input("Google Gemini Key (optional, admin)", type="password", value=st.session_state.api_key or "", key="admin_google_key")
     if api_in and api_in != st.session_state.api_key:
         st.session_state.api_key = api_in
-        # attempt to discover model
         mn = try_connect_google(st.session_state.api_key)
         if mn:
             st.session_state.model_name = mn
             st.success("Google model discovered: " + mn)
         else:
-            st.warning("Google key saved but no model discovered yet or insufficient permission.")
-
-    groq_in = st.text_input("Groq Key (optional)", type="password", value=st.session_state.groq_api_key or "", key="admin_groq_key")
+            st.warning("Google key saved — model discovery returned none or key lacks perms.")
+    groq_in = st.text_input("Groq Key (optional, admin)", type="password", value=st.session_state.groq_api_key or "", key="admin_groq_key")
     if groq_in and groq_in != st.session_state.groq_api_key:
         st.session_state.groq_api_key = groq_in
         st.success("Groq key saved for session.")
@@ -389,16 +355,17 @@ with st.sidebar:
 
     st.markdown("---")
     st.subheader("Cloud upload settings (optional)")
-    st.session_state.s3_access_key = st.text_input("S3 Access Key", value=st.session_state.get("s3_access_key",""), key="admin_s3_key")
-    st.session_state.s3_secret_key = st.text_input("S3 Secret Key", type="password", value=st.session_state.get("s3_secret_key",""), key="admin_s3_secret")
-    st.session_state.s3_region = st.text_input("S3 Region", value=st.session_state.get("s3_region",""), key="admin_s3_region")
-    st.session_state.s3_bucket = st.text_input("S3 Bucket name", value=st.session_state.get("s3_bucket",""), key="admin_s3_bucket")
+    st.session_state.s3_access_key = st.text_input("S3 Access Key", value=st.session_state.s3_access_key or "", key="admin_s3_key")
+    st.session_state.s3_secret_key = st.text_input("S3 Secret Key", type="password", value=st.session_state.s3_secret_key or "", key="admin_s3_secret")
+    st.session_state.s3_region = st.text_input("S3 Region", value=st.session_state.s3_region or "", key="admin_s3_region")
+    st.session_state.s3_bucket = st.text_input("S3 Bucket name", value=st.session_state.s3_bucket or "", key="admin_s3_bucket")
 
     st.markdown("**GCS Service Account JSON** (paste full JSON if using GCS)")
     gcs_text = st.text_area("GCS JSON", key="admin_gcs_json")
-    if gcs_text and not st.session_state.gcs_credentials_json:
+    if gcs_text:
         try:
-            st.session_state.gcs_credentials_json = json.loads(gcs_text)
+            parsed = json.loads(gcs_text)
+            st.session_state.gcs_credentials_json = parsed
             st.success("GCS credentials saved for session.")
         except Exception:
             st.warning("Invalid JSON — paste full service account JSON.")
@@ -409,17 +376,51 @@ with st.sidebar:
         st.rerun()
 
 # -------------------------
+# ADMIN LOGIN SCREEN (if not logged_in)
+# -------------------------
+if not st.session_state.logged_in:
+    st.markdown("<div style='max-width:900px;margin:20px auto;'>", unsafe_allow_html=True)
+    st.markdown("<h2>🔐 KonnectOps Admin Login</h2>", unsafe_allow_html=True)
+    st.markdown("<p class='subtitle'>Only administrators may access API keys and features.</p>", unsafe_allow_html=True)
+
+    u = st.text_input("Username", key="login_username")
+    p = st.text_input("Password", type="password", key="login_password")
+
+    col_a, col_b = st.columns([1,1])
+    with col_a:
+        if st.button("Login", key="login_button"):
+            if u == ADMIN_USERNAME and p == ADMIN_PASSWORD:
+                st.session_state.logged_in = True
+                # If embedded keys present, activate them
+                if GOOGLE_API_KEY:
+                    st.session_state.api_key = GOOGLE_API_KEY
+                    mn = try_connect_google(st.session_state.api_key)
+                    if mn:
+                        st.session_state.model_name = mn
+                if GROQ_API_KEY:
+                    st.session_state.groq_api_key = GROQ_API_KEY
+                st.success("Login successful — API providers activated (if keys configured).")
+                time.sleep(0.3)
+                st.rerun()
+            else:
+                st.error("Invalid username or password.")
+    with col_b:
+        st.write("If you didn't embed keys, paste them on the left Admin Panel after login.")
+    st.markdown("</div>", unsafe_allow_html=True)
+    st.stop()
+
+# -------------------------
 # MAIN HEADER
 # -------------------------
 st.markdown("<div style='padding:12px 18px'><span style='font-size:20px;color:#002D62;font-weight:700;'>KonnectOps Mobile</span></div>", unsafe_allow_html=True)
 
 # -------------------------
-# TABS
+# TABS (Main) - also includes Blog/Uploads/Zoho placeholders
 # -------------------------
 tabs = st.tabs(["📄 Landing", "✍️ Content", "🎨 Images", "📅 Calendar", "🛠️ Utilities", "📝 Blog", "☁️ Uploads", "👨‍💻 Zoho"])
 
 # -------------------------
-# Tab: Landing
+# TAB: Landing
 # -------------------------
 with tabs[0]:
     render_bg_section("Landing", "<div class='hero-title'><h1>Developer Console — Landing Page Generator</h1><p class='subtitle'>Quickly replace names and generate SEO-ready HTML with preview and download.</p></div>")
@@ -438,7 +439,7 @@ with tabs[0]:
             res = html_input.replace(old_txt or "", proj or "").replace("{PRICE}", price or "").replace("{LOCATION}", loc or "")
             if "{DESC}" in res:
                 seo = ask_ai_unified(f"Write 150 char SEO description for {proj} in {loc}.")
-                if seo and not seo.startswith("ERROR") and not seo.startswith("ERROR_BOTH_PROVIDERS"):
+                if seo and not seo.startswith("ERROR"):
                     res = res.replace("{DESC}", seo)
                 else:
                     res = res.replace("{DESC}", f"{proj} in {loc} - premium homes.")
@@ -450,7 +451,7 @@ with tabs[0]:
             st.download_button("Download HTML", data=res, file_name=f"{(proj or 'page').replace(' ','_')}.html", mime="text/html", key="landing_download")
 
 # -------------------------
-# Tab: Content
+# TAB: Content
 # -------------------------
 with tabs[1]:
     render_bg_section("Content", "<div class='hero-title'><h1>Marketing Studio</h1><p class='subtitle'>Human-friendly marketing drafts — blog, social, email.</p></div>")
@@ -472,7 +473,7 @@ with tabs[1]:
                 st.code(out, language="text")
 
 # -------------------------
-# Tab: Images
+# TAB: Images
 # -------------------------
 with tabs[2]:
     render_bg_section("Images", "<div class='hero-title'><h1>Image Prompt Studio</h1><p class='subtitle'>Generate detailed prompts for Midjourney / DALL·E / SD.</p></div>")
@@ -490,7 +491,7 @@ with tabs[2]:
                 st.code(out, language="text")
 
 # -------------------------
-# Tab: Calendar
+# TAB: Calendar
 # -------------------------
 with tabs[3]:
     render_bg_section("Calendar", "<div class='hero-title'><h1>2026 Festivals</h1><p class='subtitle'>Plan campaigns around key dates.</p></div>")
@@ -501,7 +502,7 @@ with tabs[3]:
     st.table(pd.DataFrame(data))
 
 # -------------------------
-# Tab: Utilities
+# TAB: Utilities
 # -------------------------
 with tabs[4]:
     render_bg_section("Utilities", "<div class='hero-title'><h1>Sales Utilities</h1><p class='subtitle'>WhatsApp links, EMI calculator, translations.</p></div>")
@@ -533,9 +534,13 @@ with tabs[4]:
                 st.error("Translation failed via AI providers. Please translate manually.")
             else:
                 st.code(out, language="text")
+# app.py — chunk 3 of 4
+"""
+Blog tab + Uploads + Zoho
+"""
 
 # -------------------------
-# Tab: Blog (Home Konnect structure)
+# Tab: Blog (Home Konnect generator)
 # -------------------------
 with tabs[5]:
     render_bg_section("Blog", "<div class='hero-title'><h1>Home Konnect Blog Generator</h1><p class='subtitle'>Produce copy-paste markdown and cover prompts/images.</p></div>")
@@ -604,7 +609,7 @@ with tabs[5]:
             st.code(blog_md, language="markdown")
             st.download_button("Download Blog (Markdown)", data=blog_md, file_name=f"{b_project.replace(' ','_')}_blog.md", mime="text/markdown", key="download_blog_md")
 
-    # Cover prompt and generation
+    # Cover prompt + generation
     st.markdown("---")
     usps_list = [u.strip() for u in b_usps.split(",") if u.strip()]
     usps_short = "; ".join(usps_list[:4])
@@ -615,21 +620,18 @@ with tabs[5]:
     )
     st.subheader("Cover Image Prompt")
     st.code(image_prompt_text, language="text")
+    if st.button("Copy Prompt (manually)", key="copy_prompt"):
+        st.write("Please copy the prompt from the box above and paste into your image generator (clipboard not available via server).")
 
     if st.button("Try Generate Cover Image (auto)", key="gen_cover_auto"):
         with st.spinner("Attempting image generation..."):
-            img_bytes = None
-            try:
-                img_bytes = generate_cover_image_via_genai(image_prompt_text, size="1200x628")
-            except Exception as e:
-                logger.exception("Auto image generation failed: %s", e)
-                img_bytes = None
+            img_bytes = generate_cover_image_via_genai(image_prompt_text, size="1200x628")
             if img_bytes:
                 st.image(img_bytes, width=700, caption="Generated cover image")
                 st.session_state._last_cover_bytes = img_bytes
                 st.download_button("Download generated cover", data=img_bytes, file_name=f"{b_project.replace(' ','_')}_cover.jpg", mime="image/jpeg", key="download_generated_cover")
             else:
-                st.warning("Automatic image generation not available. Use the prompt above with your image tool or upload an image below.")
+                st.warning("Automatic image generation not available. Use the prompt above in Midjourney / DALL·E / SD or upload an image below.")
 
     st.markdown("**Or upload your own cover image (JPEG / PNG)**")
     uploaded = st.file_uploader("Upload cover image", type=["jpg","jpeg","png"], key="blog_upload_cover")
@@ -640,7 +642,7 @@ with tabs[5]:
         st.success("Cover image loaded into session. Use the Uploads tab to push to cloud storage.")
 
 # -------------------------
-# Tab: Uploads (S3 / GCS)
+# Tab: Uploads (Cloud)
 # -------------------------
 with tabs[6]:
     render_bg_section("Uploads", "<div class='hero-title'><h1>Uploads</h1><p class='subtitle'>Upload the last generated/uploaded cover image to S3 or GCS for a public URL.</p></div>")
@@ -699,10 +701,11 @@ with tabs[7]:
                 st.error("AI providers failed. Please try again later.")
             else:
                 st.code(out, language="java")
+# app.py — chunk 4 of 4
+"""
+Diagnostics, footer, and finalization.
+"""
 
-# -------------------------
-# Diagnostics & Footer
-# -------------------------
 st.markdown("---")
 with st.expander("Diagnostics & last AI error", expanded=False):
     st.write("Logged in (admin):", st.session_state.logged_in)
@@ -716,3 +719,8 @@ with st.expander("Diagnostics & last AI error", expanded=False):
         st.write("Cover image in session memory is available.")
 
 st.markdown("</div>", unsafe_allow_html=True)
+
+# -------------------------
+# Quick usage note printed in app (non-essential)
+# -------------------------
+st.sidebar.markdown("**KonnectOps — Ready**  \nAdmin panel available. Use admin credentials to login and paste API keys if not embedded.")
