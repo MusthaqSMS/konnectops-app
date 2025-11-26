@@ -167,7 +167,7 @@ with st.sidebar:
 
     if st.button("Logout / Reset"):
         st.session_state.clear()
-        st.experimental_rerun()
+        st.rerun()
 
 
 # ==============================================
@@ -179,7 +179,7 @@ if st.session_state.api_key and not st.session_state.model_name:
         if model:
             st.session_state.model_name = model
             st.success(f"Connected to model: {model}")
-            st.experimental_rerun()
+            
         else:
             st.error("Invalid API key or no models available.")
 
@@ -192,7 +192,7 @@ if not st.session_state.model_name:
     api = st.text_input("Paste API Key", type="password")
     if st.button("Unlock"):
         st.session_state.api_key = api
-        st.experimental_rerun()
+        st.rerun()
     st.stop()
 
 
