@@ -88,9 +88,9 @@ if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
 
 if "api_key" not in st.session_state:
-    st.session_state.api_key = GOOGLE_API_KEY or ""
+    st.session_state.api_key = GOOGLE_API_KEY or "AIzaSyD_xRXkmB4fDjly_9eud5D1orqGcbacQoc"
 if "groq_api_key" not in st.session_state:
-    st.session_state.groq_api_key = GROQ_API_KEY or ""
+    st.session_state.groq_api_key = GROQ_API_KEY or "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"
 if "model_name" not in st.session_state:
     st.session_state.model_name = None
 if "bg_images" not in st.session_state:
